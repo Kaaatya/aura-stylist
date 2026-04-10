@@ -1,0 +1,5 @@
+{
+  "name": "Aura Stylist",
+  "description": "AI-powered personal stylist assistant that analyzes your style from Pinterest or photos, determines your body type, and helps you build a capsule wardrobe within your budget.",
+  "requestFramePermissions": ["camera"]
+}
