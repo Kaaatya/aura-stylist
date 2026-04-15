@@ -23,10 +23,14 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Slider } from '@/components/ui/slider';
-import { analyzeBodyType, analyzeStyleFromImages, getOutfitRecommendations, generateCapsuleWardrobe } from './services/gemini';
+import { cn } from '@/lib/utils';
+import { analyzeBodyType, analyzeStyleFromImages, getOutfitRecommendations, generateCapsuleWardrobe, analyzeWardrobeItem } from './services/gemini';
 import { UserProfile, WardrobeItem, OutfitSuggestion } from './types';
+import { BODY_TYPE_DESCRIPTIONS } from './constants';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
 
-type Step = 'welcome' | 'onboarding' | 'style' | 'wardrobe' | 'stylist';
+type Step = 'welcome' | 'onboarding' | 'body-result' | 'style' | 'style-result' | 'wardrobe' | 'stylist';
 
 export default function App() {
   const [step, setStep] = useState<Step>('welcome');
@@ -43,6 +47,45 @@ export default function App() {
   const [capsule, setCapsule] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [images, setImages] = useState<string[]>([]);
+  const [pinterestConnected, setPinterestConnected] = useState(false);
+  
+  // New Item State
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [newItem, setNewItem] = useState({
+    name: '',
+    description: '',
+    image: ''
+  });
+  const [isAnalyzingItem, setIsAnalyzingItem] = useState(false);
+
+  // Listen for Pinterest OAuth success
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'PINTEREST_AUTH_SUCCESS') {
+        setPinterestConnected(true);
+        // In a real app, you'd fetch pins here
+        // For demo, we'll add some mock pins
+        const mockPins = [
+          "https://images.unsplash.com/photo-1539109136881-3be0616acf4b?auto=format&fit=crop&w=400&q=80",
+          "https://images.unsplash.com/photo-1554412930-c74f6391914e?auto=format&fit=crop&w=400&q=80",
+          "https://images.unsplash.com/photo-1496747611176-843222e1e57c?auto=format&fit=crop&w=400&q=80"
+        ];
+        setImages(prev => [...prev, ...mockPins]);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const handlePinterestConnect = async () => {
+    try {
+      const response = await fetch('/api/auth/pinterest/url');
+      const { url } = await response.json();
+      window.open(url, 'pinterest_oauth', 'width=600,height=700');
+    } catch (error) {
+      console.error('Pinterest connect error:', error);
+    }
+  };
 
   // Mock initial wardrobe
   useEffect(() => {
@@ -61,7 +104,7 @@ export default function App() {
     const type = await analyzeBodyType(profile.measurements);
     setProfile(prev => ({ ...prev, bodyType: type }));
     setLoading(false);
-    setStep('style');
+    setStep('body-result');
   };
 
   const handleAnalyzeStyle = async () => {
@@ -69,7 +112,7 @@ export default function App() {
     const tags = await analyzeStyleFromImages(images);
     setProfile(prev => ({ ...prev, stylePreferences: tags }));
     setLoading(false);
-    setStep('wardrobe');
+    setStep('style-result');
   };
 
   const handleGetRecommendations = async () => {
@@ -81,25 +124,38 @@ export default function App() {
 
   const handleGenerateCapsule = async () => {
     setLoading(true);
-    const cap = await generateCapsuleWardrobe(profile.budget, profile.bodyType, profile.stylePreferences);
+    const cap = await generateCapsuleWardrobe(profile.budget, profile.bodyType, profile.stylePreferences, wardrobe);
     setCapsule(cap);
     setLoading(false);
   };
 
-  const addWardrobeItem = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleAddItem = async () => {
+    if (!newItem.image || !newItem.name) return;
+    
+    setIsAnalyzingItem(true);
+    const analysis = await analyzeWardrobeItem(newItem.image);
+    
+    const item: WardrobeItem = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: newItem.name,
+      category: analysis.category,
+      color: analysis.color,
+      imageUrl: newItem.image,
+      tags: analysis.tags
+    };
+    
+    setWardrobe(prev => [...prev, item]);
+    setNewItem({ name: '', description: '', image: '' });
+    setIsAddDialogOpen(false);
+    setIsAnalyzingItem(false);
+  };
+
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        const newItem: WardrobeItem = {
-          id: Math.random().toString(36).substr(2, 9),
-          name: 'New Item',
-          category: 'Uncategorized',
-          color: 'Mixed',
-          imageUrl: reader.result as string,
-          tags: []
-        };
-        setWardrobe([...wardrobe, newItem]);
+        setNewItem(prev => ({ ...prev, image: reader.result as string }));
       };
       reader.readAsDataURL(file);
     }
@@ -114,8 +170,8 @@ export default function App() {
         </div>
         {step !== 'welcome' && (
           <nav className="hidden md:flex gap-6 text-xs uppercase tracking-widest font-medium opacity-60">
-            <button onClick={() => setStep('onboarding')} className={step === 'onboarding' ? 'text-gold' : ''}>Profile</button>
-            <button onClick={() => setStep('style')} className={step === 'style' ? 'text-gold' : ''}>Style</button>
+            <button onClick={() => setStep('onboarding')} className={(step === 'onboarding' || step === 'body-result') ? 'text-gold' : ''}>Profile</button>
+            <button onClick={() => setStep('style')} className={(step === 'style' || step === 'style-result') ? 'text-gold' : ''}>Style</button>
             <button onClick={() => setStep('wardrobe')} className={step === 'wardrobe' ? 'text-gold' : ''}>Wardrobe</button>
             <button onClick={() => setStep('stylist')} className={step === 'stylist' ? 'text-gold' : ''}>Stylist</button>
           </nav>
@@ -241,6 +297,42 @@ export default function App() {
             </motion.div>
           )}
 
+          {step === 'body-result' && (
+            <motion.div 
+              key="body-result"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-2xl space-y-8 text-center py-12"
+            >
+              <div className="space-y-4">
+                <Badge variant="outline" className="border-gold text-gold px-4 py-1">Analysis Complete</Badge>
+                <h2 className="text-5xl font-serif">You are an <span className="italic text-gold">{profile.bodyType}</span></h2>
+                <div className="glass p-8 rounded-3xl mt-8 max-w-lg mx-auto">
+                  <p className="text-lg leading-relaxed text-ink/80">
+                    {BODY_TYPE_DESCRIPTIONS[profile.bodyType]}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col items-center gap-4">
+                <Button 
+                  onClick={() => setStep('style')}
+                  className="bg-ink text-paper hover:bg-ink/90 px-12 py-6 rounded-full text-lg tracking-wide flex gap-2"
+                >
+                  Continue to Style DNA
+                  <ChevronRight className="w-5 h-5" />
+                </Button>
+                <button 
+                  onClick={() => setStep('onboarding')}
+                  className="text-xs uppercase tracking-widest font-bold opacity-40 hover:opacity-100 transition-opacity"
+                >
+                  Retake Measurements
+                </button>
+              </div>
+            </motion.div>
+          )}
+
           {step === 'style' && (
             <motion.div 
               key="style"
@@ -256,9 +348,27 @@ export default function App() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="space-y-6">
-                  <p className="text-ink/70">
-                    Upload photos of outfits you love, screenshots from Pinterest, or your own "looks" to help Aura understand your aesthetic.
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-ink/70">
+                      Upload photos or connect your Pinterest to import your saved looks.
+                    </p>
+                    {!pinterestConnected ? (
+                      <Button 
+                        variant="outline" 
+                        onClick={handlePinterestConnect}
+                        className="rounded-full border-red-600 text-red-600 hover:bg-red-50 flex gap-2"
+                      >
+                        <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.08 3.16 9.41 7.63 11.17-.1-.95-.19-2.41.04-3.45.21-.93 1.35-5.73 1.35-5.73s-.34-.69-.34-1.71c0-1.6 0.93-2.8 2.09-2.8 0.98 0 1.46.74 1.46 1.63 0 .99-.63 2.47-.96 3.84-.27 1.15.58 2.08 1.71 2.08 2.05 0 3.63-2.17 3.63-5.29 0-2.76-1.99-4.7-4.82-4.7-3.28 0-5.21 2.46-5.21 5.01 0 1 .38 2.06.86 2.64.1.11.11.21.08.33-.09.37-.29 1.18-.33 1.33-.05.2-.17.24-.39.14-1.45-.67-2.35-2.79-2.35-4.49 0-3.66 2.66-7.02 7.66-7.02 4.02 0 7.15 2.87 7.15 6.7 0 4-2.52 7.21-6.02 7.21-1.17 0-2.28-.61-2.66-1.33l-.72 2.76c-.26 1.01-.97 2.27-1.44 3.05C8.95 23.82 10.43 24 12 24c6.63 0 12-5.37 12-12S18.63 0 12 0z"/>
+                        </svg>
+                        Connect Pinterest
+                      </Button>
+                    ) : (
+                      <Badge className="bg-green-100 text-green-700 border-green-200 flex gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Pinterest Connected
+                      </Badge>
+                    )}
+                  </div>
                   <div className="grid grid-cols-3 gap-2">
                     {images.map((img, i) => (
                       <div key={i} className="aspect-square rounded-xl overflow-hidden bg-ink/5 relative group">
@@ -312,6 +422,54 @@ export default function App() {
             </motion.div>
           )}
 
+          {step === 'style-result' && (
+            <motion.div 
+              key="style-result"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-2xl space-y-8 text-center py-12"
+            >
+              <div className="space-y-4">
+                <Badge variant="outline" className="border-gold text-gold px-4 py-1">Style DNA Decoded</Badge>
+                <h2 className="text-5xl font-serif">Your Aesthetic is <span className="italic text-gold">Unique</span></h2>
+                <div className="flex flex-wrap justify-center gap-3 mt-8">
+                  {profile.stylePreferences.map((tag, i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.1 }}
+                    >
+                      <Badge className="bg-ink text-paper px-6 py-2 rounded-full text-sm tracking-wide">
+                        {tag}
+                      </Badge>
+                    </motion.div>
+                  ))}
+                </div>
+                <p className="text-ink/60 max-w-md mx-auto mt-6 leading-relaxed">
+                  Aura has identified these key elements from your visual moodboard. These will guide our recommendations for your digital closet and capsule wardrobe.
+                </p>
+              </div>
+
+              <div className="flex flex-col items-center gap-4 pt-8">
+                <Button 
+                  onClick={() => setStep('wardrobe')}
+                  className="bg-ink text-paper hover:bg-ink/90 px-12 py-6 rounded-full text-lg tracking-wide flex gap-2"
+                >
+                  Enter Your Closet
+                  <ChevronRight className="w-5 h-5" />
+                </Button>
+                <button 
+                  onClick={() => setStep('style')}
+                  className="text-xs uppercase tracking-widest font-bold opacity-40 hover:opacity-100 transition-opacity"
+                >
+                  Edit Moodboard
+                </button>
+              </div>
+            </motion.div>
+          )}
+
           {step === 'wardrobe' && (
             <motion.div 
               key="wardrobe"
@@ -323,12 +481,77 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <h2 className="text-3xl font-serif">Digital Closet</h2>
                 <div className="flex gap-2">
-                  <label className="cursor-pointer">
-                    <Button variant="outline" className="rounded-full flex gap-2">
-                      <Plus className="w-4 h-4" /> Add Item
-                    </Button>
-                    <input type="file" className="hidden" accept="image/*" onChange={addWardrobeItem} />
-                  </label>
+                  <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+                    <DialogTrigger
+                      render={
+                        <Button variant="outline" className="rounded-full flex gap-2">
+                          <Plus className="w-4 h-4" /> Add Item
+                        </Button>
+                      }
+                    />
+                    <DialogContent className="sm:max-w-[425px] bg-paper border-gold/20">
+                      <DialogHeader>
+                        <DialogTitle className="font-serif text-2xl">Add New Piece</DialogTitle>
+                        <DialogDescription>
+                          Upload a photo and let Aura analyze its style DNA.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-6 py-4">
+                        <div className="flex flex-col items-center gap-4">
+                          {newItem.image ? (
+                            <div className="relative w-40 h-40 rounded-2xl overflow-hidden border border-gold/20">
+                              <img src={newItem.image} className="w-full h-full object-cover" />
+                              <button 
+                                onClick={() => setNewItem(prev => ({ ...prev, image: '' }))}
+                                className="absolute top-2 right-2 bg-ink/60 text-paper p-1 rounded-full hover:bg-ink"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ) : (
+                            <label className="w-40 h-40 rounded-2xl border-2 border-dashed border-gold/20 flex flex-col items-center justify-center cursor-pointer hover:bg-gold/5 transition-colors">
+                              <Camera className="w-8 h-8 text-gold/40" />
+                              <span className="text-[10px] uppercase tracking-widest mt-2 font-bold opacity-40">Upload Photo</span>
+                              <input type="file" className="hidden" accept="image/*" onChange={handleFileSelect} />
+                            </label>
+                          )}
+                        </div>
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="name">Item Name</Label>
+                            <Input 
+                              id="name" 
+                              placeholder="e.g., Vintage Silk Blouse" 
+                              value={newItem.name}
+                              onChange={e => setNewItem(prev => ({ ...prev, name: e.target.value }))}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="desc">Description (Optional)</Label>
+                            <Textarea 
+                              id="desc" 
+                              placeholder="Tell Aura more about this piece..." 
+                              value={newItem.description}
+                              onChange={e => setNewItem(prev => ({ ...prev, description: e.target.value }))}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button 
+                          onClick={handleAddItem} 
+                          disabled={!newItem.image || !newItem.name || isAnalyzingItem}
+                          className="w-full bg-ink text-paper py-6 rounded-xl"
+                        >
+                          {isAnalyzingItem ? (
+                            <span className="flex items-center gap-2">
+                              <Sparkles className="w-4 h-4 animate-pulse" /> Analyzing Style...
+                            </span>
+                          ) : "Add to Closet"}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
                   <Button onClick={() => setStep('stylist')} className="bg-ink text-paper rounded-full">
                     Go to Stylist
                   </Button>
@@ -356,6 +579,13 @@ export default function App() {
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
+                        </div>
+                        <div className="absolute bottom-2 left-2 flex flex-wrap gap-1">
+                          {item.tags.slice(0, 2).map((tag, i) => (
+                            <Badge key={i} className="bg-paper/80 text-ink text-[8px] px-1 py-0 backdrop-blur-sm border-none">
+                              {tag}
+                            </Badge>
+                          ))}
                         </div>
                       </div>
                       <CardContent className="p-3">
@@ -401,32 +631,45 @@ export default function App() {
                     </Button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                     {outfits.map((outfit, idx) => (
-                      <Card key={idx} className="border-none shadow-md overflow-hidden bg-white">
-                        <div className="p-4 bg-gold/5 border-b border-gold/10">
-                          <Badge className="bg-gold text-white mb-2">{outfit.occasion}</Badge>
-                          <p className="text-sm italic text-ink/70">"{outfit.reasoning}"</p>
+                      <Card key={idx} className="border-none shadow-xl overflow-hidden bg-white group hover:shadow-2xl transition-all duration-500">
+                        <div className="p-4 bg-gold/5 border-b border-gold/10 flex justify-between items-center">
+                          <Badge className="bg-gold text-white">{outfit.occasion}</Badge>
+                          <Sparkles className="w-4 h-4 text-gold opacity-40" />
                         </div>
-                        <CardContent className="p-4 space-y-4">
-                          <div className="flex -space-x-4 overflow-hidden">
+                        
+                        {/* Collage Layout */}
+                        <div className="aspect-square p-4 bg-paper/50 grid grid-cols-2 gap-2 relative">
+                          {outfit.items.slice(0, 4).map((itemId, i) => {
+                            const item = wardrobe.find(w => w.id === itemId);
+                            return item ? (
+                              <div 
+                                key={i} 
+                                className={cn(
+                                  "relative overflow-hidden rounded-xl shadow-sm bg-white",
+                                  outfit.items.length === 1 ? "col-span-2 row-span-2" : 
+                                  outfit.items.length === 2 ? "col-span-1 row-span-2" :
+                                  outfit.items.length === 3 && i === 0 ? "col-span-2 row-span-1" : "col-span-1 row-span-1"
+                                )}
+                              >
+                                <img src={item.imageUrl} className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                              </div>
+                            ) : null;
+                          })}
+                          <div className="absolute inset-0 bg-ink/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                        </div>
+
+                        <CardContent className="p-6 space-y-4">
+                          <p className="text-sm italic text-ink/70 leading-relaxed">"{outfit.reasoning}"</p>
+                          <Separator className="bg-gold/10" />
+                          <div className="grid grid-cols-2 gap-2">
                             {outfit.items.map((itemId, i) => {
                               const item = wardrobe.find(w => w.id === itemId);
                               return item ? (
-                                <div key={i} className="inline-block h-20 w-20 rounded-full ring-4 ring-white overflow-hidden bg-paper">
-                                  <img src={item.imageUrl} className="h-full w-full object-cover" />
-                                </div>
-                              ) : null;
-                            })}
-                          </div>
-                          <Separator />
-                          <div className="space-y-2">
-                            {outfit.items.map((itemId, i) => {
-                              const item = wardrobe.find(w => w.id === itemId);
-                              return item ? (
-                                <div key={i} className="flex items-center gap-2 text-sm">
-                                  <CheckCircle2 className="w-4 h-4 text-gold" />
-                                  <span>{item.name}</span>
+                                <div key={i} className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold opacity-60">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-gold" />
+                                  <span className="truncate">{item.name}</span>
                                 </div>
                               ) : null;
                             })}
@@ -467,22 +710,39 @@ export default function App() {
                             <h3 className="text-2xl font-serif">Curated Selection</h3>
                             <p className="text-sm font-medium">Est. Total: <span className="text-gold">${capsule.totalEstimatedCost}</span></p>
                           </div>
-                          <ScrollArea className="h-[500px] rounded-3xl border border-ink/5 p-4 bg-white/30">
-                            <div className="space-y-4">
+                          <ScrollArea className="h-[550px] rounded-3xl border border-gold/10 p-6 bg-white/40 backdrop-blur-sm">
+                            <div className="grid grid-cols-1 gap-4">
                               {capsule.items.map((item: any, idx: number) => (
-                                <div key={idx} className="flex gap-4 p-4 glass rounded-2xl">
-                                  <div className="w-20 h-20 bg-ink/5 rounded-xl flex items-center justify-center">
-                                    <ShoppingBag className="w-8 h-8 opacity-20" />
-                                  </div>
-                                  <div className="flex-1 space-y-1">
-                                    <div className="flex justify-between">
-                                      <h4 className="font-medium">{item.name}</h4>
-                                      <span className="text-gold font-medium">${item.price}</span>
+                                <motion.div 
+                                  key={idx}
+                                  initial={{ opacity: 0, y: 20 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{ delay: idx * 0.1 }}
+                                  className="flex gap-6 p-5 glass rounded-2xl group hover:bg-white/60 transition-all border border-transparent hover:border-gold/20"
+                                >
+                                  <div className="w-24 h-24 bg-paper rounded-xl flex items-center justify-center shadow-inner relative overflow-hidden">
+                                    <ShoppingBag className="w-10 h-10 text-gold opacity-10" />
+                                    <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold uppercase tracking-tighter opacity-20 group-hover:opacity-40 transition-opacity">
+                                      {item.category}
                                     </div>
-                                    <p className="text-xs text-ink/60 leading-relaxed">{item.why}</p>
-                                    <Badge variant="secondary" className="text-[10px] uppercase tracking-tighter">{item.category}</Badge>
                                   </div>
-                                </div>
+                                  <div className="flex-1 space-y-2">
+                                    <div className="flex justify-between items-start">
+                                      <div>
+                                        <h4 className="font-serif text-lg leading-tight">{item.name}</h4>
+                                        <Badge variant="secondary" className="mt-1 text-[9px] uppercase tracking-widest bg-gold/10 text-gold border-none">
+                                          {item.category}
+                                        </Badge>
+                                      </div>
+                                      <span className="text-gold font-serif text-xl">${item.price}</span>
+                                    </div>
+                                    <p className="text-xs text-ink/70 leading-relaxed italic">"{item.why}"</p>
+                                    <div className="pt-2 flex items-center gap-2 text-[9px] uppercase tracking-[0.2em] font-bold opacity-30">
+                                      <Sparkles className="w-3 h-3" />
+                                      AI Recommended for your {profile.bodyType} shape
+                                    </div>
+                                  </div>
+                                </motion.div>
                               ))}
                             </div>
                           </ScrollArea>
